@@ -1,0 +1,7 @@
+# pattern,methodCall
+create vmware backup job,vmwareBackupPage().createBackupJob(testData);
+create proxmox backup job,proxmoxBackupPage().createBackupJob(testData);
+run job,dashboardPage().runJob(testData);
+wait for job to finish, dashboardPage().waitJobRunComplete(testData.getJobName(), DEFAULT_TIMEOUT);
+verify backup object, "vmwareBackupPage().validateCreatedBackupJob(testData);"
+remove the job,"dashboardPage().removeJob(testData.getJobName(), testData.getDeleteMode());"
