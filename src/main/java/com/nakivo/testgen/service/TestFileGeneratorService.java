@@ -1,20 +1,22 @@
 package com.nakivo.testgen.service;
 
 
+import com.fasterxml.jackson.databind.util.JSONPObject;
 import freemarker.template.Configuration;
 import freemarker.template.Template;
 import freemarker.template.TemplateException;
 import freemarker.template.Version;
 import org.springframework.stereotype.Service;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.StringWriter;
+import java.io.*;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 
@@ -77,6 +79,7 @@ public class TestFileGeneratorService {
         cfg.setClassLoaderForTemplateLoading(getClass().getClassLoader(), TEMPLATE_DIR);
         cfg.setDefaultEncoding("UTF-8");
 
+        Template classTemplate = cfg.getTemplate("class_template.ftl");
         Template methodTemplate = cfg.getTemplate("method_template.ftl");
 
         // Prepare step data
@@ -101,22 +104,62 @@ public class TestFileGeneratorService {
         methodTemplate.process(methodCtx, methodOut);
         String methodContent = methodOut.toString();
 
-        // Create a new class using template
-        Template classTemplate = cfg.getTemplate("class_template.ftl");
+        // --- Write or update the test class file ---
+//        File dir = new File(OUTPUT_DIR);
+//        if (!dir.exists()) {
+//            System.out.println("[WARN] Target output dir " + OUTPUT_DIR + " doesn't exist. Use the current dir.");
+//            dir = new File(".");
+//        }
 
-        File dir = new File(OUTPUT_DIR);
         String className = category + "ManualTest";
-        File file = new File(dir, className + ".java");
-        Map<String, Object> classCtx = new HashMap<>();
-        classCtx.put("packageName", "com.nakivo.tests.manual");
-        classCtx.put("className", className);
-        classCtx.put("category", category);
-        classCtx.put("testMethods", Arrays.asList(methodContent));
+//        File file = new File(dir, className + ".java");
+        GitHubFileService service = new GitHubFileService(
+            "davidle-nkv",
+            "qa-automation-code",
+            "main",
+            System.getenv("GITHUB_TOKEN")
+        );
 
-        StringWriter classOut = new StringWriter();
-        classTemplate.process(classCtx, classOut);
+        File file = null;
+        String targetFilePath = OUTPUT_DIR + "/" + className + ".java";
+        try {
+            file = service.getFileFromGithub(targetFilePath);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
 
-        return Map.of("path", file.getPath().replace("\\", "/"), "content", classOut.toString());
+        String updatedContent = null;
+
+        if (file.exists()) {
+            updatedContent = updateOrAppendMethod(file, methodContent, id, className);
+        } else {
+            // Create a new class using template
+            Map<String, Object> classCtx = new HashMap<>();
+            classCtx.put("packageName", "com.nakivo.tests.manual");
+            classCtx.put("className", className);
+            classCtx.put("category", category);
+            classCtx.put("testMethods", Arrays.asList(methodContent));
+
+            StringWriter classOut = new StringWriter();
+            classTemplate.process(classCtx, classOut);
+            updatedContent = classOut.toString();
+            System.out.println("[INFO] Created new test class: " + className);
+            writeFile(file.getPath(), updatedContent);
+        }
+
+//        File dir = new File(OUTPUT_DIR);
+//        String className = category + "ManualTest";
+//        File file = new File(dir, className + ".java");
+//        Map<String, Object> classCtx = new HashMap<>();
+//        classCtx.put("packageName", "com.nakivo.tests.manual");
+//        classCtx.put("className", className);
+//        classCtx.put("category", category);
+//        classCtx.put("testMethods", Arrays.asList(methodContent));
+//
+//        StringWriter classOut = new StringWriter();
+//        classTemplate.process(classCtx, classOut);
+
+        return Map.of("path", targetFilePath, "content", updatedContent);
     }
 
     // --- New: CSV path + loader replacing the hardcoded map ---
@@ -226,6 +269,229 @@ public class TestFileGeneratorService {
             .filter(s -> !s.isEmpty())            // remove empty entries
             .map(s -> "\"" + s + "\"")            // wrap with double quotes
             .collect(Collectors.joining(", "));
+    }
+
+    /* Replace / append test method safely (brace-aware).
+       file: File object for the target Java file
+       methodContent: full method text (including annotations and body)
+       id: test case id (e.g. "TC_001")
+       className: the Java class name (e.g. "VMwareBackupManualTest")
+    */
+    private static String updateOrAppendMethod(File file, String methodContent, String id, String className) throws IOException {
+        String existing = readFile(file.getPath());
+        String updated = existing;
+        boolean replaced = false;
+
+        // 1) Try to find annotation-based method: find the annotation preceding the id literal
+        int idLiteralPos = existing.indexOf("\"" + id + "\"");
+        if (idLiteralPos != -1) {
+            int annStart = existing.lastIndexOf("@FrameworkAnnotation", idLiteralPos);
+            if (annStart != -1) {
+                // find method signature after the annotation (search from annStart)
+                Pattern sigPattern = Pattern.compile("public\\s+void\\s+" + Pattern.quote(id) + "\\s*\\(", Pattern.CASE_INSENSITIVE);
+                Matcher sigMatcher = sigPattern.matcher(existing);
+                if (sigMatcher.find(idLiteralPos)) {
+                    int sigPos = sigMatcher.start();
+                    int methodEnd = findMethodEnd(existing, sigPos);
+                    if (methodEnd != -1) {
+                        // replace from annotation start to methodEnd (inclusive)
+                        updated = existing.substring(0, annStart) + methodContent + existing.substring(methodEnd + 1);
+                        replaced = true;
+                        System.out.println("[INFO] Replaced annotated method for id: " + id);
+                    }
+                } else {
+                    // last resort: search signature after annStart
+                    sigMatcher = sigPattern.matcher(existing.substring(annStart));
+                    if (sigMatcher.find()) {
+                        int sigPos = annStart + sigMatcher.start();
+                        int methodEnd = findMethodEnd(existing, sigPos);
+                        if (methodEnd != -1) {
+                            updated = existing.substring(0, annStart) + methodContent + existing.substring(methodEnd + 1);
+                            replaced = true;
+                            System.out.println("[INFO] Replaced annotated method (fallback) for id: " + id);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2) Fallback: find method signature only (public void ID(...){ ... })
+        if (!replaced) {
+            Pattern sigOnly = Pattern.compile("public\\s+void\\s+" + Pattern.quote(id) + "\\s*\\(", Pattern.CASE_INSENSITIVE);
+            Matcher m = sigOnly.matcher(existing);
+            if (m.find()) {
+                int sigPos = m.start();
+                // if there is an annotation before signature, prefer to remove annotation block too
+                int annBefore = existing.lastIndexOf("@FrameworkAnnotation", sigPos);
+                int replaceStart = annBefore >= 0 ? annBefore : sigPos;
+
+                int methodEnd = findMethodEnd(existing, sigPos);
+                if (methodEnd != -1) {
+                    updated = existing.substring(0, replaceStart) + methodContent + existing.substring(methodEnd + 1);
+                    replaced = true;
+                    System.out.println("[INFO] Replaced existing method by signature for id: " + id);
+                }
+            }
+        }
+
+        // 3) If not found, append before the class closing brace (preserve it)
+        if (!replaced) {
+            int classPos = existing.indexOf("class " + className);
+            int insertPos = -1;
+            if (classPos >= 0) {
+                int openBrace = existing.indexOf('{', classPos);
+                if (openBrace >= 0) {
+                    int classEnd = findMatchingBrace(existing, openBrace);
+                    if (classEnd >= 0) insertPos = classEnd;
+                }
+            }
+            if (insertPos < 0) {
+                // fallback: last '}' in file
+                insertPos = existing.lastIndexOf('}');
+            }
+            if (insertPos >= 0) {
+                String before = existing.substring(0, insertPos);
+                String after = existing.substring(insertPos); // includes the final brace
+                updated = before + "\n\n" + methodContent + "\n" + after;
+                System.out.println("[INFO] Appended new test method before class end: " + id);
+            } else {
+                // completely malformed, append and add a closing brace
+                updated = existing + "\n\n" + methodContent + "\n}";
+                System.out.println("[WARN] Could not find class end; appended method and added closing brace: " + id);
+            }
+        }
+
+        // Normalize newlines and remove redundant trailing lines
+        updated = updated.replaceAll("\r\n", "\n")
+            .replaceAll("(?m)^[ \t]*\n{3,}", "\n\n")   // collapse >2 blank lines
+            .replaceAll("[ \t]+$", "");               // trim trailing spaces
+
+        // Persist
+        writeFile(file.getPath(), updated.trim() + "\n");
+
+        return updated.trim() + "\n";
+    }
+
+    /* Find the index of the '}' that closes the method that starts at the method signature position.
+       Returns index of the closing '}' (0-based), or -1 if not found. */
+    private static int findMethodEnd(String content, int signaturePos) {
+        int len = content.length();
+        // find first '{' after signaturePos
+        int bracePos = content.indexOf('{', signaturePos);
+        if (bracePos < 0) return -1;
+
+        int depth = 0;
+        boolean inSingle = false;
+        boolean inDouble = false;
+        boolean inLineComment = false;
+        boolean inBlockComment = false;
+
+        for (int i = bracePos; i < len; i++) {
+            char c = content.charAt(i);
+            char next = (i + 1 < len) ? content.charAt(i + 1) : '\0';
+
+            // handle exiting line comment
+            if (inLineComment) {
+                if (c == '\n') inLineComment = false;
+                continue;
+            }
+            // handle exiting block comment
+            if (inBlockComment) {
+                if (c == '*' && next == '/') { inBlockComment = false; i++; continue; }
+                else continue;
+            }
+            // handle string/char escapes
+            if (inSingle) {
+                if (c == '\\' && i + 1 < len) { i++; continue; }
+                if (c == '\'') inSingle = false;
+                continue;
+            }
+            if (inDouble) {
+                if (c == '\\' && i + 1 < len) { i++; continue; }
+                if (c == '"') inDouble = false;
+                continue;
+            }
+
+            // not in any special state
+            if (c == '/' && next == '/') { inLineComment = true; i++; continue; }
+            if (c == '/' && next == '*') { inBlockComment = true; i++; continue; }
+            if (c == '\'') { inSingle = true; continue; }
+            if (c == '"') { inDouble = true; continue; }
+
+            if (c == '{') {
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0) return i;
+            }
+        }
+        return -1;
+    }
+
+    /* Find the matching closing brace index for an opening brace at openPos.
+       Returns index of matching '}', or -1 if not found. Uses same quote/comment-aware scan. */
+    private static int findMatchingBrace(String content, int openPos) {
+        int len = content.length();
+        if (openPos < 0 || openPos >= len || content.charAt(openPos) != '{') return -1;
+
+        int depth = 1;
+        boolean inSingle = false;
+        boolean inDouble = false;
+        boolean inLineComment = false;
+        boolean inBlockComment = false;
+
+        for (int i = openPos + 1; i < len; i++) {
+            char c = content.charAt(i);
+            char next = (i + 1 < len) ? content.charAt(i + 1) : '\0';
+
+            if (inLineComment) {
+                if (c == '\n') inLineComment = false;
+                continue;
+            }
+            if (inBlockComment) {
+                if (c == '*' && next == '/') { inBlockComment = false; i++; continue; }
+                else continue;
+            }
+            if (inSingle) {
+                if (c == '\\' && i + 1 < len) { i++; continue; }
+                if (c == '\'') inSingle = false;
+                continue;
+            }
+            if (inDouble) {
+                if (c == '\\' && i + 1 < len) { i++; continue; }
+                if (c == '"') inDouble = false;
+                continue;
+            }
+
+            if (c == '/' && next == '/') { inLineComment = true; i++; continue; }
+            if (c == '/' && next == '*') { inBlockComment = true; i++; continue; }
+            if (c == '\'') { inSingle = true; continue; }
+            if (c == '"') { inDouble = true; continue; }
+
+            if (c == '{') depth++;
+            else if (c == '}') {
+                depth--;
+                if (depth == 0) return i;
+            }
+        }
+        return -1;
+    }
+
+    private static String readFile(String path) throws IOException {
+        BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(path), "UTF-8"));
+        StringBuilder sb = new StringBuilder();
+        String line;
+        while ((line = br.readLine()) != null) sb.append(line).append("\n");
+        br.close();
+        return sb.toString();
+    }
+
+    private static void writeFile(String path, String content) throws IOException {
+        System.out.println("[INFO] Writing to file: " + path);
+
+        BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(path), "UTF-8"));
+        bw.write(content);
+        bw.close();
     }
 
 }
