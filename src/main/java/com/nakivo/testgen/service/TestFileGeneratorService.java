@@ -2,6 +2,7 @@ package com.nakivo.testgen.service;
 
 
 import com.fasterxml.jackson.databind.util.JSONPObject;
+import com.nakivo.testgen.utils.GitHubUtil;
 import freemarker.template.Configuration;
 import freemarker.template.Template;
 import freemarker.template.TemplateException;
@@ -117,7 +118,7 @@ public class TestFileGeneratorService {
             "davidle-nkv",
             "qa-automation-code",
             "main",
-            System.getenv("GITHUB_TOKEN")
+            GitHubUtil.getGitHubPAT()
         );
 
         File file = null;
