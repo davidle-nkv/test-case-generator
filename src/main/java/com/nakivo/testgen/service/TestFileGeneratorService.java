@@ -1,7 +1,6 @@
 package com.nakivo.testgen.service;
 
 
-import com.fasterxml.jackson.databind.util.JSONPObject;
 import com.nakivo.testgen.utils.GitHubUtil;
 import freemarker.template.Configuration;
 import freemarker.template.Template;
@@ -10,10 +9,6 @@ import freemarker.template.Version;
 import org.springframework.stereotype.Service;
 
 import java.io.*;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.regex.Matcher;
@@ -106,14 +101,7 @@ public class TestFileGeneratorService {
         String methodContent = methodOut.toString();
 
         // --- Write or update the test class file ---
-//        File dir = new File(OUTPUT_DIR);
-//        if (!dir.exists()) {
-//            System.out.println("[WARN] Target output dir " + OUTPUT_DIR + " doesn't exist. Use the current dir.");
-//            dir = new File(".");
-//        }
-
         String className = category + "ManualTest";
-//        File file = new File(dir, className + ".java");
         GitHubFileService service = new GitHubFileService(
             "davidle-nkv",
             "qa-automation-code",
@@ -147,18 +135,6 @@ public class TestFileGeneratorService {
             System.out.println("[INFO] Created new test class: " + className);
             writeFile(file.getPath(), updatedContent);
         }
-
-//        File dir = new File(OUTPUT_DIR);
-//        String className = category + "ManualTest";
-//        File file = new File(dir, className + ".java");
-//        Map<String, Object> classCtx = new HashMap<>();
-//        classCtx.put("packageName", "com.nakivo.tests.manual");
-//        classCtx.put("className", className);
-//        classCtx.put("category", category);
-//        classCtx.put("testMethods", Arrays.asList(methodContent));
-//
-//        StringWriter classOut = new StringWriter();
-//        classTemplate.process(classCtx, classOut);
 
         return Map.of("path", targetFilePath, "content", updatedContent);
     }

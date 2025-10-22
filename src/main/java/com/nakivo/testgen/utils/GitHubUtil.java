@@ -1,12 +1,5 @@
 package com.nakivo.testgen.utils;
 
-/**
- * Description.
- *
- * Author: David Le
- * Date: 10/21/2025
- * Time: 11:18 AM
- */
 public class GitHubUtil {
 
     public static String getGitHubPAT() {
@@ -19,6 +12,4 @@ public class GitHubUtil {
         }
         return pat;
     }
-
-
 }
