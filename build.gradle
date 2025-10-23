@@ -23,6 +23,10 @@ bootJar {
     }
 }
 
+jar {
+    enabled = false
+}
+
 // --- Custom tasks ---
 tasks.register('printVersion') {
     doLast {
