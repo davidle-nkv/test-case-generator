@@ -2,6 +2,8 @@ package com.nakivo.testgen.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nakivo.testgen.config.GitHubConfig;
+import org.springframework.stereotype.Service;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -13,28 +15,24 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.util.Base64;
 
+@Service
 public class GitHubFileService {
 
-    private final String owner;
-    private final String repo;
-    private final String branch;
-    private final String pat; // Personal Access Token
+    private final GitHubConfig config;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public GitHubFileService(String owner, String repo, String branch, String pat) {
-        this.owner = owner;
-        this.repo = repo;
-        this.branch = branch;
-        this.pat = pat;
+    public GitHubFileService(GitHubConfig config) {
+        this.config = config;
     }
 
     public File getFileFromGithub(String filePath) throws IOException, InterruptedException {
-        String apiUrl = "https://api.github.com/repos/" + owner + "/" + repo + "/contents/" + filePath + "?ref=" + branch;
+        String apiUrl = "https://api.github.com/repos/" + config.getOwner() + "/" + config.getRepo() + "/contents/" + filePath + "?ref=" + config.getBranch();
 
         HttpClient client = HttpClient.newHttpClient();
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(apiUrl))
-            .header("Authorization", "token " + pat)
+            .header("Authorization", "token " + config.getPat())
             .header("Accept", "application/vnd.github+json")
             .GET()
             .build();

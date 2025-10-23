@@ -18,8 +18,15 @@ import java.util.stream.Collectors;
 
 @Service
 public class TestFileGeneratorService {
+
+    private final GitHubFileService gitHubFileService;
+
     private static final String TEMPLATE_DIR = "templates";
     private static final String OUTPUT_DIR = "src/test/java/com/nakivo/tests/manual";
+
+    public TestFileGeneratorService(GitHubFileService gitHubFileService) {
+        this.gitHubFileService = gitHubFileService;
+    }
 
     public Map<String, String> generateFromText(String textInput) throws IOException, TemplateException {
         Map<String, Object> data = parseInputText(textInput);
@@ -102,17 +109,10 @@ public class TestFileGeneratorService {
 
         // --- Write or update the test class file ---
         String className = category + "ManualTest";
-        GitHubFileService service = new GitHubFileService(
-            "davidle-nkv",
-            "qa-automation-code",
-            "main",
-            GitHubUtil.getGitHubPAT()
-        );
-
         File file = null;
         String targetFilePath = OUTPUT_DIR + "/" + className + ".java";
         try {
-            file = service.getFileFromGithub(targetFilePath);
+            file = gitHubFileService.getFileFromGithub(targetFilePath);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
